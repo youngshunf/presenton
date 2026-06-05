@@ -396,6 +396,11 @@ def main() -> int:
         help="在 sidecar↔new-api 间挂结构化输出兼容 shim（默认开；"
              "new-api 渠道原生支持 json_schema 后可 --no-llm-compat 摘除）",
     )
+    ap.add_argument(
+        "--fastapi-source", default=None,
+        help="改从源码跑 FastAPI（验证 P2 构建期补丁，如 localhost→动态 Next URL）："
+             "传 servers/fastapi 目录，用其 .venv/bin/python server.py。默认空=用打包二进制。",
+    )
     args = ap.parse_args()
 
     cred = resolve_credential(args.image_model)
@@ -435,9 +440,18 @@ def main() -> int:
             "nextjs", [art.node_bin, str(art.nextjs_server)], art.nextjs_cwd,
             {**env, "HOSTNAME": "127.0.0.1", "PORT": str(next_port)},
             logs / "nextjs.log")
-        fast_proc = sc.spawn(
-            "fastapi", [str(art.fastapi_bin), "--port", str(fast_port)],
-            art.fastapi_dir, env, logs / "fastapi.log")
+        if args.fastapi_source:
+            src_dir = Path(args.fastapi_source).resolve()
+            venv_py = src_dir / ".venv" / "bin" / "python"
+            if not venv_py.exists():
+                raise SystemExit(f"[FATAL] 源码 FastAPI 缺 venv：{venv_py}（先 uv sync）")
+            print(f"[fastapi] 源码模式：{venv_py} {src_dir}/server.py（验证 P2 补丁）")
+            fast_argv = [str(venv_py), str(src_dir / "server.py"), "--port", str(fast_port)]
+            fast_cwd = src_dir
+        else:
+            fast_argv = [str(art.fastapi_bin), "--port", str(fast_port)]
+            fast_cwd = art.fastapi_dir
+        fast_proc = sc.spawn("fastapi", fast_argv, fast_cwd, env, logs / "fastapi.log")
 
         wait_ready(f"http://127.0.0.1:{next_port}/", "Next.js",
                    proc=next_proc, log=logs / "nextjs.log")

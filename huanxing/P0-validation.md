@@ -7,16 +7,25 @@
 ## 验证日期
 2026-06-05（owner=h_47094e96 小智 / 18611348367）；new-api 已由主人在 `127.0.0.1:3180` 上线后复跑。
 
-## TL;DR（new-api 上线后的活体结果）
+## TL;DR（new-api 上线后的活体结果）—— 完整 generate→export 已真实跑通 ✅
 
-sidecar 完整起来了（FastAPI+Next.js+兼容 shim 三进程），**大纲生成真实跑通**（gpt-5.5 经 new-api），
-**Chrome 导出运行时可启动**。完整 generate→export 还差两项，均已**精确隔离**且**非 P0 代码缺陷**：
+经三处真实修复后，**完整 generate→导出 PPTX 已端到端跑通**（HTTP 200 / 94s / 落盘 143KB 合法
+OOXML / 2 slides）。证据见 `test-results/presenton-p0/presenton-generate-2slides.pptx`。
 
-1. **new-api gpt-5.x 不支持 `response_format: json_schema`（结构化输出）** → 已加 `newapi_compat_shim.py`
-   在 sidecar↔new-api 间改写为 `json_object`+schema 注入（真实 JSON，零 fake），大纲已通过。
-2. **Presenton 把模板 schema 页 URL 硬编码 `http://localhost`（80 口）**，嵌入式 sidecar（非 root、无 nginx）
-   无法在 80 口提供服务 → 属 **P2「presenton 构建期补丁」**（改用动态 Next.js URL）。
-3. **new-api 未配图像渠道**（`/v1/models` 无图像模型）→ D4 通道① 逐页配图待主人加图像渠道（基础设施）。
+三处修复（均零 Mock 零 Fake）：
+
+1. **new-api gpt-5.x 不支持 `response_format: json_schema`（结构化输出，静默丢弃→返回 Markdown→
+   llmai `json.loads` 崩 char 0）** → 加 `newapi_compat_shim.py` 在 sidecar↔new-api 间改写为
+   `json_object`+schema 注入（真实 JSON）；Presenton 自带 `validate_schema` 重试环兜底。
+2. **Presenton 模板 schema 页 URL 硬编码 `http://localhost`（80 口）** → P2 构建期补丁
+   `internal_app_base_url()` 改用动态 Next.js URL（`NEXT_PUBLIC_URL`）。已用**打补丁源码 FastAPI**
+   （`--fastapi-source`）活体验证：4 次 LLM 调用（大纲+结构+2 页内容）全经 shim，模板 schema 抽取
+   经 Chrome 加载 `NEXT_PUBLIC_URL/schema` 成功，导出 PPTX 落盘。
+3. **new-api 未配图像渠道**（`/v1/models` 无图像模型，503 `model_not_found`）→ D4 通道① 逐页配图
+   **如实降级为占位图**（`/static/images/placeholder.jpg`，非致命）；待主人加图像渠道后即真实配图（基础设施）。
+
+> 注：打包二进制（PyInstaller PYZ）无法改 Python，故用**打补丁源码 FastAPI** 验证 P2 补丁；
+> 生产嵌入式 sidecar 应分发**打补丁后重新打包**的 Presenton（P2「构建期补丁」即指此）。
 
 ## 活体逐阶段证据（按 generate 管线推进）
 
