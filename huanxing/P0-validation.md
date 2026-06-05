@@ -5,7 +5,55 @@
 > 启动器：`huanxing/sidecar_launch.py`（同时是 P2 daemon 端 Rust sidecar 管理器的规格）。
 
 ## 验证日期
-2026-06-05（owner=h_47094e96 小智 / 18611348367）
+2026-06-05（owner=h_47094e96 小智 / 18611348367）；new-api 已由主人在 `127.0.0.1:3180` 上线后复跑。
+
+## TL;DR（new-api 上线后的活体结果）
+
+sidecar 完整起来了（FastAPI+Next.js+兼容 shim 三进程），**大纲生成真实跑通**（gpt-5.5 经 new-api），
+**Chrome 导出运行时可启动**。完整 generate→export 还差两项，均已**精确隔离**且**非 P0 代码缺陷**：
+
+1. **new-api gpt-5.x 不支持 `response_format: json_schema`（结构化输出）** → 已加 `newapi_compat_shim.py`
+   在 sidecar↔new-api 间改写为 `json_object`+schema 注入（真实 JSON，零 fake），大纲已通过。
+2. **Presenton 把模板 schema 页 URL 硬编码 `http://localhost`（80 口）**，嵌入式 sidecar（非 root、无 nginx）
+   无法在 80 口提供服务 → 属 **P2「presenton 构建期补丁」**（改用动态 Next.js URL）。
+3. **new-api 未配图像渠道**（`/v1/models` 无图像模型）→ D4 通道① 逐页配图待主人加图像渠道（基础设施）。
+
+## 活体逐阶段证据（按 generate 管线推进）
+
+| 阶段 | 结果 | 证据 |
+|---|---|---|
+| sidecar 三进程就绪 | ✅ | shim/next/fastapi 各取动态端口；`/docs`200、`/api/v1/ppt/presentation/all`200 |
+| 大纲生成（LLM 经 new-api） | ✅ | `[shim] #1 POST /v1/chat/completions rewritten(json_schema→json_object)` → fastapi `Generated 2 outlines for the presentation` |
+| 结构化输出 json_schema 兼容 | ✅（shim） | 直连 new-api 时 `json.loads` 崩 `Expecting value: line 1 column 1 (char 0)`（拿到 Markdown）；经 shim 改 `json_object`+注入 schema 后产出合法 JSON（实测 3 页 `{"slides":[…]}`） |
+| 导出运行时 Chrome 启动 | ✅ | 注入 `PUPPETEER_EXECUTABLE_PATH`(复用已装 Chrome for Testing 148) 后，错误从「Failed to launch browser / Chrome was not found」变为「Failed to fetch or parse schema page」——证明浏览器已能启动，仅差页面 URL |
+| 模板 schema 抽取 | ❌（P2 补丁） | `extract_schema("http://localhost/schema?group=general")` + 兜底 `http://localhost/api/template` 都连 `localhost:80`，sidecar 未在 80 口起服务 → `Cannot connect to host localhost:80` |
+| 逐页配图（D4 通道①） | ⏸️（基础设施） | new-api `/v1/models` 无图像模型；`generate_image` 失败被 catch 落占位图（非致命，见 `services/image_generation_service.py:125`） |
+
+## 三处真实修复 / 隔离（代码层，零 fake）
+
+### ① new-api 结构化输出兼容 shim（`huanxing/newapi_compat_shim.py`，D1 兼容层）
+- 活体实测：new-api 的 gpt-5.x 渠道桥接 OpenAI Responses API（响应 id `resp_…`），
+  `response_format: json_schema`（strict）被**静默丢弃**，返回自由 Markdown；但**支持 `json_object`**。
+- shim 仅对 `*/chat/completions` 且 `response_format.type==json_schema` 的请求改写为 `json_object`+把 schema 注入
+  system 消息；其余（含 `/v1/images/generations`、`/v1/models`、非结构化 chat）原样透传。流式 SSE 增量转发。
+- 正确性不靠 shim 兜底：Presenton 自带 `generate_structured_with_schema_retries` 的 `validate_schema` 重试环
+  仍校验 JSON 是否匹配 schema 并自纠。
+- 退场条件：new-api 提供原生支持 json_schema 的渠道后，`--no-llm-compat` 摘除，`CUSTOM_LLM_URL` 直指 new-api。
+
+### ② Chrome 复用（`PUPPETEER_EXECUTABLE_PATH`，D2）
+- Presenton 导出运行时把 Chrome 版本钉死（如 146.0.7680.76），首跑自动下载在本机损坏
+  （`end of central directory record signature not found`）。
+- 启动器 `_resolve_chrome()` 复用已装 Chrome（env 覆盖 > 已缓存 Chrome for Testing 最新 > 系统 Chrome），
+  经 `PUPPETEER_EXECUTABLE_PATH`+`PUPPETEER_SKIP_DOWNLOAD` 注入，跳过下载。
+
+### ③ 模板 schema URL 硬编码 `http://localhost`（P2 待补丁）
+- `templates/get_layout_by_name.py:134` 主路径 `http://localhost/schema?group=…`（Chrome 加载）
+  + `:83` 兜底 `http://localhost/api/template?group=…`（HTTP）——都是 80 口。
+- 真 Electron app 用动态端口加 nginx-on-80 的部署假设；嵌入式 sidecar 非 root 无法绑 80（实测 `bind 80 → Permission denied`）。
+- 修法属 **P2 presenton 构建期补丁**：把 `http://localhost` 改为动态 Next.js URL（`NEXT_PUBLIC_URL`）。
+  源码 FastAPI 仅 36 依赖、无重型 ML 库，可打补丁后从源码跑，验证完整 generate→export。
+
+## 历史记录（new-api 未上线时的初版结论，已被上文 TL;DR 取代）
 
 ## 已证实（零 Mock 零 Fake，真实进程）
 

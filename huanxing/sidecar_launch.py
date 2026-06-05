@@ -113,6 +113,7 @@ class Artifacts:
     imagemagick: str | None
     convert_module: Path | None
     node_bin: str
+    chrome_bin: str | None  # 导出运行时 Puppeteer 用（D2：复用已装 Chrome，跳过钉版下载）
 
 
 def _first_existing(paths: list[str]) -> str | None:
@@ -153,6 +154,7 @@ def resolve_artifacts(app_resources: Path) -> Artifacts:
         [os.environ.get("HX_NODE_BIN", ""), "node",
          os.path.expanduser("~/.nvm/versions/node/v22.22.0/bin/node")]
     ) or "node"
+    chrome_bin = _resolve_chrome()
     return Artifacts(
         fastapi_bin=fastapi_bin,
         fastapi_dir=fastapi_bin.parent,
@@ -163,7 +165,35 @@ def resolve_artifacts(app_resources: Path) -> Artifacts:
         imagemagick=imagemagick,
         convert_module=convert_module if convert_module.exists() else None,
         node_bin=node_bin,
+        chrome_bin=chrome_bin,
     )
+
+
+def _resolve_chrome() -> str | None:
+    """找一个可用 Chrome 给 Puppeteer（D2）：env 覆盖 > 已缓存 Chrome for Testing（取最新）> 系统 Chrome。
+
+    Presenton 导出运行时把 Chrome 版本钉死（如 146.0.7680.76），首跑自动下载常因网络/代理
+    损坏（end of central directory record signature not found）。复用已装 Chrome 经
+    PUPPETEER_EXECUTABLE_PATH 注入即可跳过下载（零 fake：找不到就返回 None，导出会如实报错）。
+    """
+    env_override = os.environ.get("HX_CHROME_BIN", "")
+    if env_override and Path(env_override).exists():
+        return env_override
+    cft_root = Path(os.path.expanduser("~/.cache/puppeteer/chrome"))
+    if cft_root.is_dir():
+        # 形如 mac_arm-148.0.7778.97/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/...
+        cands: list[tuple[str, str]] = []
+        for d in cft_root.iterdir():
+            inner = d / "chrome-mac-arm64" / "Google Chrome for Testing.app" / "Contents" / "MacOS" / "Google Chrome for Testing"
+            if inner.exists():
+                cands.append((d.name, str(inner)))
+        if cands:
+            cands.sort(reverse=True)  # 版本号字典序近似取最新
+            return cands[0][1]
+    return _first_existing([
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +254,11 @@ def build_env(
         env["IMAGEMAGICK_BINARY"] = art.imagemagick
     if art.convert_module:
         env["BUILT_PYTHON_MODULE_PATH"] = str(art.convert_module)
+    if art.chrome_bin:
+        # 导出运行时 Puppeteer：用已装 Chrome，禁止首跑去下钉版（常损坏）。
+        env["PUPPETEER_EXECUTABLE_PATH"] = art.chrome_bin
+        env["PUPPETEER_SKIP_DOWNLOAD"] = "true"
+        env["PUPPETEER_CACHE_DIR"] = os.path.expanduser("~/.cache/puppeteer")
     return env
 
 
@@ -296,6 +331,31 @@ def precheck_newapi(cred: LlmCredential) -> bool:
         return False
 
 
+def start_compat_shim(sc: "Sidecar", cred: LlmCredential, logs: Path) -> str:
+    """起 new-api 结构化输出兼容 shim（json_schema→json_object+inject），返回供 sidecar 用的 .../v1.
+
+    为什么：活体实测 new-api gpt-5.x 渠道不认 `response_format: json_schema`（静默丢弃→返回
+    Markdown→Presenton `json.loads` 崩 500），但认 `json_object`。shim 在中间做最小改写，
+    真实模型真实 JSON（详见 newapi_compat_shim.py）。fastapi 启动期会校验 LLM 连通性，
+    故 shim 必须**先就绪**再起 fastapi。
+    """
+    shim_path = Path(__file__).resolve().with_name("newapi_compat_shim.py")
+    if not shim_path.exists():
+        raise SystemExit(f"[FATAL] 缺少兼容 shim：{shim_path}")
+    upstream_root = (
+        cred.base_url[:-3].rstrip("/") if cred.base_url.endswith("/v1") else cred.base_url
+    )
+    shim_port = free_port()
+    proc = sc.spawn(
+        "llm-compat-shim",
+        [sys.executable, str(shim_path), "--port", str(shim_port), "--upstream", upstream_root],
+        shim_path.parent, {}, logs / "shim.log",
+    )
+    wait_ready(f"http://127.0.0.1:{shim_port}/healthz", "compat-shim",
+               timeout=20, proc=proc, log=logs / "shim.log")
+    return f"http://127.0.0.1:{shim_port}/v1"
+
+
 @dataclass
 class Sidecar:
     procs: list[subprocess.Popen] = field(default_factory=list)
@@ -331,6 +391,11 @@ def main() -> int:
     ap.add_argument("--app-data", default=None, help="sidecar 专用数据目录（默认 ~/.hasn/<owner>/presenton-sidecar）")
     ap.add_argument("--hold", action="store_true", help="启动后保持运行（供手动 UI/Agent 联调）")
     ap.add_argument("--smoke", action="store_true", help="探活 + 列路由后退出")
+    ap.add_argument(
+        "--llm-compat", action=argparse.BooleanOptionalAction, default=True,
+        help="在 sidecar↔new-api 间挂结构化输出兼容 shim（默认开；"
+             "new-api 渠道原生支持 json_schema 后可 --no-llm-compat 摘除）",
+    )
     args = ap.parse_args()
 
     cred = resolve_credential(args.image_model)
@@ -344,18 +409,27 @@ def main() -> int:
     print(f"fastapi bin : {art.fastapi_bin}")
     print(f"soffice     : {art.soffice}")
     print(f"imagemagick : {art.imagemagick}")
+    print(f"chrome      : {art.chrome_bin}")
     print(f"app_data    : {app_data}")
 
     newapi_up = precheck_newapi(cred)
 
     fast_port, next_port = free_port(), free_port()
     env = build_env(cred, art, app_data, fast_port, next_port)
-    write_user_config(env, app_data)
     logs = app_data / "logs"
     logs.mkdir(parents=True, exist_ok=True)
 
     sc = Sidecar()
+    shim_url: str | None = None
     try:
+        # LLM 兼容 shim 须先于 fastapi 就绪：new-api gpt-5.x 不认 json_schema，fastapi 启动期
+        # 会校验 LLM 连通性（api/lifespan.py）。shim 改写 json_schema→json_object（零 fake 真 JSON）。
+        if args.llm_compat:
+            shim_url = start_compat_shim(sc, cred, logs)
+            env["CUSTOM_LLM_URL"] = shim_url
+            print(f"[llm-compat] CUSTOM_LLM_URL -> {shim_url}（json_schema→json_object）")
+        write_user_config(env, app_data)
+
         # 先备好 NEXT_PUBLIC_URL（env 已含），再起两进程；导出在请求期才用 Next，故顺序不破。
         next_proc = sc.spawn(
             "nextjs", [art.node_bin, str(art.nextjs_server)], art.nextjs_cwd,
@@ -374,6 +448,18 @@ def main() -> int:
         for path in ("/api/v1/ppt/presentation/all", "/docs"):
             code = http_ok(f"http://127.0.0.1:{fast_port}{path}")
             print(f"[route] {path} -> {code}")
+
+        # 把解析出的端口写入 app_data/sidecar.json，供后台启动后读取（P2 管理器同款句柄）。
+        (app_data / "sidecar.json").write_text(json.dumps({
+            "owner_id": cred.owner_id,
+            "fastapi_port": fast_port,
+            "nextjs_port": next_port,
+            "fastapi_url": f"http://127.0.0.1:{fast_port}",
+            "nextjs_url": f"http://127.0.0.1:{next_port}",
+            "app_data": str(app_data),
+            "newapi_up": newapi_up,
+            "llm_compat_url": shim_url,  # None=直连 new-api；否则 sidecar 经此 shim 出网
+        }))
 
         print("\n=== P0 sidecar 就绪 ===")
         print(f"  FastAPI : http://127.0.0.1:{fast_port}  (/docs, /api/v1/ppt/*)")
