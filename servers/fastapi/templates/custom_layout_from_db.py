@@ -10,11 +10,12 @@ from models.sql.presentation_layout_code import PresentationLayoutCodeModel
 from models.sql.template import TemplateModel
 from services.database import async_session_maker
 from templates.presentation_layout import PresentationLayoutModel
-from utils.internal_http import internal_request_headers
+from utils.internal_http import internal_app_base_url, internal_request_headers
 
 LOGGER = logging.getLogger(__name__)
 
-_CUSTOM_COMPILE_URL = "http://localhost/api/template/custom"
+# 唤星 embedded_desktop sidecar 补丁：用动态 Next.js URL（NEXT_PUBLIC_URL）替代硬编码 http://localhost。
+_CUSTOM_COMPILE_URL = f"{internal_app_base_url()}/api/template/custom"
 
 
 async def load_custom_presentation_layout(layout_name: str) -> PresentationLayoutModel:
