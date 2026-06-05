@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { LayoutDashboard, Star, Brain, Settings, Palette, HelpCircle } from "lucide-react";
+import { LayoutDashboard, Star, Brain, Settings, Palette } from "lucide-react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 
@@ -38,7 +38,7 @@ const DashboardSidebar = () => {
 
                 <Link href={`/dashboard`} className="flex items-center  pb-6 border-b border-[#E1E1E5]   gap-2    ">
                     <div className="bg-[#7C51F8] rounded-full cursor-pointer p-1 flex justify-center items-center mx-auto">
-                        <img src="/logo-with-bg.png" alt="Presenton logo" className="h-[40px] object-contain w-full" />
+                        <img src="/logo-with-bg.png" alt="唤星" className="h-[40px] object-contain w-full" />
                     </div>
                 </Link>
                 <nav className="pt-6 font-syne" aria-label="Dashboard sections">
@@ -94,14 +94,7 @@ const DashboardSidebar = () => {
 
             <div className=" pt-5 border-t border-[#E1E1E5]  font-syne "
             >
-                <div className="mb-4">
-
-                    <Link href="https://docs.presenton.ai/help" target="_blank" className="flex flex-col tex-center items-center gap-2  transition-colors"><HelpCircle className="w-4 h-4" /><span className="text-[11px] text-slate-800">Help</span></Link>
-                </div>
-                <div className="mb-4">
-
-                    <Link href="https://discord.com/invite/9ZsKKxudNE" target="_blank" className="flex flex-col tex-center items-center gap-2  transition-colors"><img src="/discord.png" alt="Discord" className="w-5 h-5 rounded-full object-cover border border-[#EDEEEF]" /><span className="text-[11px] text-slate-800">Community</span></Link>
-                </div>
+                {/* 唤星接入（§6.4b）：隐藏 Presenton 的 Discord / Help / docs.presenton.ai 外链。 */}
 
 
                 {BelongingNavItems.map(({ key, label: itemLabel, icon: Icon }) => {

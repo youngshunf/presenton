@@ -10,7 +10,7 @@ const Header: React.FC = () => {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
-            <img src="/logo-white.png" alt="Presenton" className="h-6 w-auto" />
+            <img src="/logo-white.png" alt="唤星" className="h-6 w-auto" />
           </Link>
 
           <nav className="flex items-center gap-4">
