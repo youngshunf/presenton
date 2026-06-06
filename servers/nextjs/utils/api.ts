@@ -43,6 +43,32 @@ function shouldUseDirectFastApiOriginInBrowser(): boolean {
   return isElectronRuntime() || !!getFastApiUrlFromQuery();
 }
 
+// 唤星 embedded_desktop 同源嵌入（设计 12 §6.3 / 任务 #1245）：daemon 反代只把
+// `/api/v1/apps/presentation/api/<sub>` 转给 FastAPI `/api/v1/ppt/<sub>`，不转裸 `/api/v1/ppt/*`。
+// 故前端在同源浏览器态须把 FastAPI 调用从 `/api/v1/ppt/...` 改写为该反代前缀。
+// build 期由 `NEXT_PUBLIC_HX_EMBED_API_BASE` 内联；未设（Docker/Electron）→ null → 不改写（零行为变更）。
+const PPT_API_PREFIX = "/api/v1/ppt";
+
+function getEmbedApiBase(): string | null {
+  const base = process.env.NEXT_PUBLIC_HX_EMBED_API_BASE;
+  if (!base) return null;
+  const trimmed = base.trim().replace(/\/+$/, "");
+  return trimmed || null;
+}
+
+function applyEmbedApiBase(normalizedPath: string): string {
+  const embedBase = getEmbedApiBase();
+  if (!embedBase) return normalizedPath;
+  if (
+    normalizedPath === PPT_API_PREFIX ||
+    normalizedPath.startsWith(`${PPT_API_PREFIX}/`)
+  ) {
+    // 例：/api/v1/ppt/presentation/generate -> /api/v1/apps/presentation/api/presentation/generate
+    return `${embedBase}${normalizedPath.slice(PPT_API_PREFIX.length)}`;
+  }
+  return normalizedPath;
+}
+
 function resolveBackendPathForRuntime(path: string): string {
   const normalizedPath = withLeadingSlash(path);
 
@@ -51,7 +77,7 @@ function resolveBackendPathForRuntime(path: string): string {
     typeof window !== "undefined" &&
     !shouldUseDirectFastApiOriginInBrowser()
   ) {
-    return normalizedPath;
+    return applyEmbedApiBase(normalizedPath);
   }
 
   return `${getFastAPIUrl()}${normalizedPath}`;

@@ -31,3 +31,6 @@ servers/fastapi/dist/
 servers/fastapi/fastembed_cache/
 servers/fastapi/*.egg-info/
 .codex/
+
+# 唤星 embedded_desktop sidecar bundle 组装（dev-desktop.sh 生成的 symlink 布局，任务 #1245）
+.hx-embed-bundle/
