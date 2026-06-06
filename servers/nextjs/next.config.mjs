@@ -2,7 +2,7 @@
 // `/api/v1/apps/presentation/ui/*` 反代到本 sidecar（透传完整前缀，不剥成 root）。设
 // basePath/assetPrefix 让 Next 的页面、`/_next/*` 资源、客户端路由全部带该前缀，与反代一致；
 // 否则资源发出裸 `/_next/*` 会命中 daemon 根 404。env 未设（Docker/Electron）即为空 → 零行为变更。
-const embedUiBase = (process.env.HX_EMBED_UI_BASE || "").trim().replace(/\/+$/, "");
+const embedUiBase = (process.env.NEXT_PUBLIC_HX_EMBED_UI_BASE || "").trim().replace(/\/+$/, "");
 
 const nextConfig = {
   ...(embedUiBase ? { basePath: embedUiBase, assetPrefix: embedUiBase } : {}),

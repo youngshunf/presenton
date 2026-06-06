@@ -23,9 +23,19 @@ export function ConfigurationInitializer({ children }: { children: React.ReactNo
     fetchUserConfigState();
   }, []);
 
+  // 唤星 embedded_desktop（任务 #1245）：basePath 生效时 router.push('/upload') 后
+  // window.location.pathname 是带前缀的 `/api/v1/apps/presentation/ui/upload`，永远不
+  // === 裸 `/upload`，导致 isLoading 永不置 false（卡在 Initializing）。比较前先剥掉
+  // basePath。env 未设（Docker/Electron）→ embedBase 为空 → 行为与原版完全一致。
   const setLoadingToFalseAfterNavigatingTo = (pathname: string) => {
+    const embedBase = (process.env.NEXT_PUBLIC_HX_EMBED_UI_BASE || "").replace(/\/+$/, "");
     const interval = setInterval(() => {
-      if (window.location.pathname === pathname) {
+      const raw = window.location.pathname;
+      const current =
+        embedBase && raw.startsWith(embedBase)
+          ? raw.slice(embedBase.length) || "/"
+          : raw;
+      if (current === pathname) {
         clearInterval(interval);
         setIsLoading(false);
       }
@@ -41,17 +51,25 @@ export function ConfigurationInitializer({ children }: { children: React.ReactNo
     setIsLoading(true);
 
     let canChangeKeys = false;
-    try {
-      if (window.electron?.getCanChangeKeys) {
-        canChangeKeys = await window.electron.getCanChangeKeys();
-      } else {
-        const res = await fetch('/api/can-change-keys');
-        const data = await res.json();
-        canChangeKeys = data.canChange ?? false;
+    // 唤星 embedded_desktop（任务 #1245）：密钥由 sidecar 启动 env 权威下发、配置 UI 已隐藏，
+    // owner 不可改密钥 → canChangeKeys 恒 false，直奔 /upload。且 client 的裸路径
+    // fetch('/api/can-change-keys') 在 basePath 生效后会命中 daemon 根（非 Next API 路由），
+    // 取不到真值、行为不确定；故 embedded 直接短路不依赖该 fetch。env 未设（Docker/Electron）
+    // → embedded 为 false → 走原 fetch 逻辑，零行为变更。
+    const embedded = !!(process.env.NEXT_PUBLIC_HX_EMBED_UI_BASE || "").trim();
+    if (!embedded) {
+      try {
+        if (window.electron?.getCanChangeKeys) {
+          canChangeKeys = await window.electron.getCanChangeKeys();
+        } else {
+          const res = await fetch('/api/can-change-keys');
+          const data = await res.json();
+          canChangeKeys = data.canChange ?? false;
+        }
+      } catch (e) {
+        console.error('Failed to fetch can-change-keys:', e);
+        canChangeKeys = false;
       }
-    } catch (e) {
-      console.error('Failed to fetch can-change-keys:', e);
-      canChangeKeys = false;
     }
     dispatch(setCanChangeKeys(canChangeKeys));
 
