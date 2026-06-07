@@ -10,8 +10,13 @@ from llmai.shared import (
     LLMTool,
     Message,
     ResponseFormat,
+    SystemMessage,
     UserMessage,
     normalize_content_parts,
+)
+from llmai.shared.response_formats import (
+    get_response_format_strict,
+    get_response_schema,
 )
 
 from utils.llm_config import get_extra_body
@@ -19,6 +24,50 @@ from utils.schema_utils import get_schema_validation_errors
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _build_json_schema_directive(schema: dict) -> str:
+    return (
+        "CRITICAL OUTPUT FORMAT — your entire response MUST be a single valid "
+        "JSON object that strictly conforms to the JSON Schema below. Start the "
+        "response with '{' and end with '}'. Do NOT wrap it in markdown code "
+        "fences and do NOT add any prose before or after the JSON. Markdown is "
+        "still allowed *inside* string values where the instructions above ask "
+        "for it.\n\nJSON Schema:\n" + json.dumps(schema, ensure_ascii=False)
+    )
+
+
+def augment_messages_for_schema(
+    messages: Sequence[Message],
+    response_format: Optional[ResponseFormat],
+) -> list[Message]:
+    """Inject the target JSON Schema into the system prompt as an explicit directive.
+
+    某些 OpenAI 兼容网关（例如经 new-api 代理的 reasoning 模型 gpt-5.x）会静默
+    忽略 ``response_format=json_schema``，模型转而返回 Markdown，导致下游
+    ``dirtyjson.loads`` 在 char 0 失败（"Expecting value: line 1 column 1"）。
+
+    为保证零 fake 的真实可用，这里把目标 JSON Schema 作为显式指令注入到 system
+    prompt（同时保留 ``response_format`` 作为对合规网关的双保险）。实测注入后经
+    new-api 的 gpt-5.5 可稳定产出合法 JSON；对本就遵守 ``response_format`` 的官方
+    provider 仅增加少量提示文本，行为不变。
+    """
+    strict = get_response_format_strict(response_format, default=False) or False
+    schema = get_response_schema(response_format, strict=strict)
+    if not schema:
+        return list(messages)
+
+    directive = _build_json_schema_directive(schema)
+    result: list[Message] = list(messages)
+    for index, message in enumerate(result):
+        if isinstance(message, SystemMessage):
+            result[index] = SystemMessage(
+                content=f"{message.content}\n\n{directive}"
+            )
+            return result
+
+    result.insert(0, SystemMessage(content=directive))
+    return result
 
 
 def get_generate_kwargs(
@@ -31,7 +80,7 @@ def get_generate_kwargs(
 ) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "model": model,
-        "messages": list(messages),
+        "messages": augment_messages_for_schema(messages, response_format),
         "stream": stream,
     }
     if max_tokens is not None:
